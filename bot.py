@@ -60,7 +60,9 @@ intents.message_content = True
 intents.presences = True
 """
 
-intents = discord.Intents.default()
+intents = discord.Intents.all()
+intents.message_content = True  # Enable message content intent
+intents.voice_states = True  # Enable voice state intents
 
 """
 Uncomment this if you want to use prefix (normal) commands.
