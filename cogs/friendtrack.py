@@ -1,16 +1,11 @@
 """
-Copyright © Krypton 2019-Present - https://github.com/kkrypt0nn (https://krypton.ninja)
-Description:
-🐍 A simple template to start to code your own and personalized Discord bot in Python
-
-Version: 6.2.0
+Copyright © Siam Shafiq 2024-Present - https://github.com/siamshafiq
 """
 
 from discord.ext import commands
 from discord.ext.commands import Context
-from datetime import datetime
+import datetime
 import discord
-
 
 # Here we name the cog and create a new class for the cog.
 class Track(commands.Cog, name="track"):
@@ -18,8 +13,6 @@ class Track(commands.Cog, name="track"):
         self.bot = bot
         self.join_times = {}
         self.total_durations = {}
-
-    # Here you can just add your own commands, you'll always need to provide "self" as first parameter.
 
     def updateDuration(self, member, duration):
         if member.id in self.total_durations:
@@ -29,25 +22,37 @@ class Track(commands.Cog, name="track"):
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
-        now = datetime.now()
+        now = datetime.datetime.now()
         
         # Check if the user joined a voice channel
         if before.channel is None and after.channel is not None:
-            self.join_times[member.id] = now  # Record the join time
+            #self.join_times[member.id] = now  # Record the join time
+
+            await self.bot.database.connection.execute(
+                'INSERT INTO user_data (user_id, join_time, total_duration) VALUES (?, ?, ?)',
+                (str(member.id), now, 0)
+            )
+
             print(f'{member} joined {after.channel} at {now.strftime("%Y-%m-%d %H:%M:%S")}')
         
         # Check if the user left a voice channel
         elif before.channel is not None and after.channel is None:
-            if member.id in self.join_times:
-                join_time = self.join_times.pop(member.id)  # Get and remove the join time
-                duration = now - join_time  # Calculate the duration
-                duration_seconds = duration.total_seconds()
+            async with self.bot.database.connection.execute(
+                'SELECT id, join_time FROM user_data WHERE user_id = ? ORDER BY id DESC LIMIT 1',
+                (str(member.id),)
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    join_time_str = row[1].split('.')[0]  # Split and take the part before the fractional seconds
+                    join_time = datetime.datetime.strptime(join_time_str, '%Y-%m-%d %H:%M:%S')
+                    duration = (datetime.datetime.now() - join_time).total_seconds()
 
-                self.updateDuration(member, duration)
-
-                hours, remainder = divmod(duration_seconds, 3600)
-                minutes, seconds = divmod(remainder, 60)
-                print(f'{member} left {before.channel} at {now.strftime("%Y-%m-%d %H:%M:%S")}. Duration: {int(hours)} hours, {int(minutes)} minutes, {int(seconds)} seconds')
+                    await self.bot.database.connection.execute(
+                        'UPDATE user_data SET total_duration = total_duration + ? WHERE id = ?',
+                        (duration, row[0])
+                    )
+                    await self.bot.database.connection.commit()
+                    print(f'{member} left {before.channel} at {now}. Duration: {duration} seconds')
         
         # Check if the user switched voice channels
         elif before.channel is not None and after.channel is not None and before.channel != after.channel:
@@ -59,13 +64,18 @@ class Track(commands.Cog, name="track"):
         if member is None:
             member = ctx.author  # Default to the user who invoked the command
 
-        if member.id in self.total_durations:
-            total_duration_seconds = self.total_durations[member.id].total_seconds()
-            total_hours, total_remainder = divmod(total_duration_seconds, 3600)
-            total_minutes, total_seconds = divmod(total_remainder, 60)
-            await ctx.send(f'Total time spent in voice channels by {member}: {int(total_hours)} hours, {int(total_minutes)} minutes, {int(total_seconds)} seconds')
-        else:
-            await ctx.send(f'No data available for {member}')
+        async with self.bot.database.connection.execute(
+            'SELECT SUM(total_duration) FROM user_data WHERE user_id = ?',
+            (str(member.id),)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row and row[0] is not None:
+                total_duration_seconds = row[0]
+                total_hours, total_remainder = divmod(total_duration_seconds, 3600)
+                total_minutes, total_seconds = divmod(total_remainder, 60)
+                await ctx.send(f'Total time spent in voice channels by {member}: {int(total_hours)} hours, {int(total_minutes)} minutes, {int(total_seconds)} seconds')
+            else:
+                await ctx.send(f'No data available for {member}')
 
 
     
