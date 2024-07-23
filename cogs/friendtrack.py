@@ -7,6 +7,44 @@ from discord.ext.commands import Context
 import datetime
 import discord
 
+class UserSelect(discord.ui.Select):
+    def __init__(self, members):
+        options = [
+            discord.SelectOption(
+                label=str(member.display_name),
+                value=str(member.id),
+                description=f"Duration for {member.display_name} ({member.name})",
+            ) for member in members
+        ]
+        super().__init__(
+            placeholder="Select a user...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        member_id = int(self.values[0])
+        member = interaction.guild.get_member(member_id)
+        
+        if member:
+            async with interaction.client.database.connection.execute(
+                'SELECT SUM(total_duration) FROM user_data WHERE user_id = ?',
+                (str(member.id),)
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row and row[0] is not None:
+                    total_duration_seconds = row[0]
+                    total_hours, total_remainder = divmod(total_duration_seconds, 3600)
+                    total_minutes, total_seconds = divmod(total_remainder, 60)
+                    duration_message = f'Total time spent in voice channels by {member}: {int(total_hours)} hours, {int(total_minutes)} minutes, {int(total_seconds)} seconds'
+                else:
+                    duration_message = f'No data available for {member}'
+                
+                await interaction.response.send_message(duration_message)
+        else:
+            await interaction.response.send_message("User not found.")
+
 # Here we name the cog and create a new class for the cog.
 class Track(commands.Cog, name="track"):
     def __init__(self, bot) -> None:
@@ -60,22 +98,14 @@ class Track(commands.Cog, name="track"):
     
     #Find how long user has been in voice channels total.
     @commands.command()
-    async def duration(self, ctx, member: discord.Member = None):
-        if member is None:
-            member = ctx.author  # Default to the user who invoked the command
-
-        async with self.bot.database.connection.execute(
-            'SELECT SUM(total_duration) FROM user_data WHERE user_id = ?',
-            (str(member.id),)
-        ) as cursor:
-            row = await cursor.fetchone()
-            if row and row[0] is not None:
-                total_duration_seconds = row[0]
-                total_hours, total_remainder = divmod(total_duration_seconds, 3600)
-                total_minutes, total_seconds = divmod(total_remainder, 60)
-                await ctx.send(f'Total time spent in voice channels by {member}: {int(total_hours)} hours, {int(total_minutes)} minutes, {int(total_seconds)} seconds')
-            else:
-                await ctx.send(f'No data available for {member}')
+    async def duration(self, ctx):
+        guild = ctx.guild
+        members = guild.members
+        select = UserSelect(members)
+        view = discord.ui.View()
+        view.add_item(select)
+        await ctx.send("Select a user to view their voice channel duration:", view=view)
+        
 
 
     
