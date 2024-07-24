@@ -14,7 +14,7 @@ class UserSelect(discord.ui.Select):
                 label=str(member.display_name),
                 value=str(member.id),
                 description=f"Duration for {member.display_name} ({member.name})",
-            ) for member in members
+            ) for member in members if not member.bot
         ]
         super().__init__(
             placeholder="Select a user...",
@@ -45,12 +45,50 @@ class UserSelect(discord.ui.Select):
         else:
             await interaction.response.send_message("User not found.")
 
+class LastOnline(discord.ui.Select):
+    def __init__(self, members):
+        options = [
+            discord.SelectOption(
+                label=str(member.display_name),
+                value=str(member.id),
+                description=f"Last online time for {member.display_name} ({member.name})",
+            ) for member in members if not member.bot
+        ]
+        super().__init__(
+            placeholder="Select a user...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+    
+    async def callback(self, interaction: discord.Interaction):
+        member_id = int(self.values[0])
+        member = interaction.guild.get_member(member_id)
+
+        if member:
+            async with interaction.client.database.connection.execute(
+                'SELECT last_online FROM user_data WHERE user_id = ? ORDER BY last_online DESC LIMIT 1',
+                (str(member.id),)
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row and row[0] is not None:
+                    last_online_time_str = row[0]
+                    if last_online_time_str:
+                        last_online_time = datetime.datetime.strptime(last_online_time_str, '%Y-%m-%d %H:%M:%S.%f')
+                        last_online_str = last_online_time.strftime('%Y-%m-%d %H:%M:%S')
+                        await interaction.response.send_message(f'{member} was last online at {last_online_str}.')
+                    else:
+                        await interaction.response.send_message(f'No online activity data available for {member}.')
+        else:
+            await interaction.response.send_message("User not found.")
+
 # Here we name the cog and create a new class for the cog.
 class Track(commands.Cog, name="track"):
     def __init__(self, bot) -> None:
         self.bot = bot
         self.join_times = {}
         self.total_durations = {}
+        self.last_online_times = {}
 
     def updateDuration(self, member, duration):
         if member.id in self.total_durations:
@@ -64,8 +102,6 @@ class Track(commands.Cog, name="track"):
         
         # Check if the user joined a voice channel
         if before.channel is None and after.channel is not None:
-            #self.join_times[member.id] = now  # Record the join time
-
             await self.bot.database.connection.execute(
                 'INSERT INTO user_data (user_id, join_time, total_duration) VALUES (?, ?, ?)',
                 (str(member.id), now, 0)
@@ -90,13 +126,17 @@ class Track(commands.Cog, name="track"):
                         (duration, row[0])
                     )
                     await self.bot.database.connection.commit()
+                    await self.bot.database.connection.execute(
+                        'INSERT INTO user_data (user_id, last_online) VALUES (?, ?)',
+                        (str(member.id), now)
+                    )
                     print(f'{member} left {before.channel} at {now}. Duration: {duration} seconds')
         
         # Check if the user switched voice channels
         elif before.channel is not None and after.channel is not None and before.channel != after.channel:
             print(f'{member} moved from {before.channel} to {after.channel} at {now.strftime("%Y-%m-%d %H:%M:%S")}')
     
-    #Find how long user has been in voice channels total.
+    # Find how long user has been in voice channels total.
     @commands.command()
     async def duration(self, ctx):
         guild = ctx.guild
@@ -105,10 +145,16 @@ class Track(commands.Cog, name="track"):
         view = discord.ui.View()
         view.add_item(select)
         await ctx.send("Select a user to view their voice channel duration:", view=view)
-        
 
+    @commands.command()
+    async def lastonline(self, ctx):
+        guild = ctx.guild
+        members = guild.members
+        select = LastOnline(members)
+        view = discord.ui.View()
+        view.add_item(select)
+        await ctx.send("Select a user to view their last online time:", view=view)
 
-    
-# And then we finally add the cog to the bot so that it can load, unload, reload and use it's content.
+# And then we finally add the cog to the bot so that it can load, unload, reload and use its content.
 async def setup(bot) -> None:
     await bot.add_cog(Track(bot))
